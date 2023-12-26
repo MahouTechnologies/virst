@@ -6,11 +6,12 @@ use displayed_model::DisplayedModel;
 use egui_integration::EguiIntegration;
 use egui_wgpu::wgpu;
 use example_scene_controller::ExampleSceneController;
-use glam::{uvec2, Vec2};
+use glam::{uvec2, EulerRot, Vec2};
 use gui::Gui;
-use inox2d::model::Model;
+use inox2d::{model::Model, puppet::Puppet};
 use inox2d_wgpu::Renderer;
-use tracker::TrackerSystem;
+use mahou_vmc::VmcData;
+use tracker::{BindingKind, ParamBinding, ParamBindings, TrackerSystem};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -129,7 +130,7 @@ pub async fn run() {
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            let temp_texture = device.create_texture(&wgpu::TextureDescriptor{
+            let temp_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: None,
                 size: output.texture.size(),
                 mip_level_count: 1,
@@ -143,21 +144,22 @@ pub async fn run() {
             let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
             if let Some((model, scene_ctrl, renderer)) = &mut current {
-                if !x {
-                    // apply_bindings(
-                    //     &mut model.puppet,
-                    //     &displayed_model.bindings.lock().unwrap(),
-                    //     &tracker_system,
-                    // );
-                    x = true;
-                }
+                apply_bindings(
+                    &mut model.puppet,
+                    &displayed_model.bindings.lock().unwrap(),
+                    &tracker_system,
+                );
 
                 scene_ctrl.update(&mut renderer.camera);
                 renderer.render(&queue, &device, &model.puppet, &temp_view);
                 let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Part Render Encoder"),
                 });
-                encoder.copy_texture_to_texture(temp_texture.as_image_copy(), output.texture.as_image_copy(), output.texture.size());
+                encoder.copy_texture_to_texture(
+                    temp_texture.as_image_copy(),
+                    output.texture.as_image_copy(),
+                    output.texture.size(),
+                );
                 queue.submit(std::iter::once(encoder.finish()));
             }
 
@@ -230,6 +232,60 @@ pub async fn run() {
 
 fn map_value(val: f32, (x1, x2): (f32, f32), (y1, y2): (f32, f32)) -> f32 {
     (val - x1) * (y2 - y1) / (x2 - x1) + y1
+}
+
+pub fn get_value(binding: &BindingKind, data: &VmcData) -> f32 {
+    match binding {
+        BindingKind::Expr => todo!(),
+        BindingKind::Simple {
+            input,
+            input_range,
+            output_range,
+            dampen,
+        } => {
+            let initial = match input {
+                tracker::InputKind::None => 0.0f32,
+                tracker::InputKind::Blendshape(x) => data.blends.get(x).copied().unwrap(),
+                tracker::InputKind::Bone(x, v) => {
+                    let bone = data.bones.get(x).copied().unwrap();
+                    let (yaw, pitch, roll) = bone.1.to_euler(EulerRot::YXZ);
+                    match v {
+                        tracker::InputBoneKind::X => bone.0.x,
+                        tracker::InputBoneKind::Y => bone.0.y,
+                        tracker::InputBoneKind::Z => bone.0.z,
+                        tracker::InputBoneKind::Roll => roll.to_degrees(),
+                        tracker::InputBoneKind::Pitch => pitch.to_degrees(),
+                        tracker::InputBoneKind::Yaw => yaw.to_degrees(),
+                    }
+                }
+            };
+
+            map_value(initial, *input_range, *output_range)
+        }
+    }
+}
+
+pub fn apply_bindings(puppet: &mut Puppet, bindings: &ParamBindings, tracker: &TrackerSystem) {
+    puppet.begin_set_params();
+
+    let data = tracker.data().lock().unwrap();
+
+    for (param, binding) in bindings {
+        match binding {
+            ParamBinding::OneDim(Some(binding)) => {
+                let val = get_value(binding, &data);
+                puppet.set_param(param, Vec2::new(val, 0.0))
+            }
+            ParamBinding::TwoDim(Some((binding_x, binding_y))) => {
+                let x = get_value(binding_x, &data);
+                let y = get_value(binding_y, &data);
+                puppet.set_param(param, Vec2::new(x, y))
+            }
+            _ => {}
+        }
+    }
+
+    puppet.end_set_params();
 }
 
 fn main() {

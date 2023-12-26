@@ -50,7 +50,9 @@ impl EguiIntegration {
 
         self.state
             .handle_platform_output(window, &self.context, output.platform_output);
-        self.triangles = self.context.tessellate(output.shapes, output.pixels_per_point);
+        self.triangles = self
+            .context
+            .tessellate(output.shapes, output.pixels_per_point);
         self.delta = output.textures_delta;
     }
 

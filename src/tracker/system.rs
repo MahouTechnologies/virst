@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use thiserror::Error;
 use mahou_vmc::VmcData;
+use thiserror::Error;
 
 pub struct TrackerSystem {
     join_handle: Option<JoinHandle<()>>,
